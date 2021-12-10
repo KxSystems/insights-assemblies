@@ -1,0 +1,13 @@
+apiVersion: insights.kx.com/v1alpha1
+kind: Assembly
+metadata:
+  name: basic-assembly
+  labels:
+    env: dev
+spec:
+  attach: false
+  labels:
+    type: basic
+  tables:
+    trace:
+      description: Manufacturing trace data
