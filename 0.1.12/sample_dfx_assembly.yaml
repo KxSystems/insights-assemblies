@@ -1,0 +1,199 @@
+apiVersion: insights.kx.com/v1alpha1
+kind: Assembly
+metadata:
+  name: dfx-assembly
+  labels:
+    env: dev
+spec:
+  attach: false
+  labels:
+    type: basic
+  tables:
+    dfxOrder:
+      description: dfxOrder data
+      type: partitioned
+      columns:
+        - name: date
+          type: date
+        - name: sym
+          type: symbol
+          attrMem: parted
+        - name: time
+          type: timestamp
+        - name: action
+          type: char
+        - name: id
+          type: long
+        - name: idstr
+          type: char
+        - name: side
+          type: char
+        - name: price
+          type: float
+        - name: size
+          type: int
+        - name: src
+          type: symbol
+        - name: srcTime
+          type: timestamp
+        - name: orderType
+          type: char
+        - name: prevOrderId
+          type: long
+        - name: snapShotInd
+          type: boolean
+    dfxQuote:
+      description: dfxQuote data
+      type: partitioned
+      columns:
+        - name: date
+          type: date
+        - name: sym
+          type: symbol
+          attrMem: parted
+        - name: time
+          type: timestamp
+        - name: src
+          type: symbol
+        - name: bid
+          type: float
+        - name: ask
+          type: float
+        - name: bsize
+          type: int
+        - name: asize
+          type: int
+        - name: srcTime
+          type: timestamp
+        - name: cond
+          type: symbol
+        - name: layer
+          type: symbol
+        - name: expiryTime
+          type: timestamp
+        - name: msgrcv
+          type: timestamp
+    dfxTrade:
+      type: partitioned
+      description: dfxTrade data
+      columns:
+        - name: date
+          type: date
+        - name: sym
+          type: symbol
+          attrMem: parted
+        - name: time
+          type: timestamp
+        - name: price
+          type: float
+        - name: size
+          type: int
+        - name: seqNum
+          type: long
+        - name: src
+          type: symbol
+        - name: srcTime
+          type: timestamp
+        - name: cond
+          type: symbol
+        - name: status
+          type: symbol
+        - name: side
+          type: char
+        - name: msgrcv
+          type: timestamp
+  mounts:
+    rdb:
+      type: stream
+      baseURI: none
+      partition: none
+    idb:
+      type: local
+      baseURI: file:///data/db/idb
+      partition: ordinal
+      volume:
+        storageClass: "azurefile"
+        size: "20Gi"
+        accessModes:
+          - ReadWriteMany
+    hdb:
+      type: local
+      baseURI: file:///data/db/hdb
+      partition: date
+      dependency:
+        - idb
+      volume:
+        storageClass: "azurefile"
+        size: "20Gi"
+        accessModes:
+          - ReadWriteMany
+  elements:
+    sp:
+      description: Processor of streams
+      pipelines:
+        dfxdefault:
+          protectedExecution: false
+          source: north
+          destination: south
+          spec: |-
+            order: ([]date:"d"$();sym:`p#"s"$();time:"p"$();action:"c"$();id:"j"$();idstr:"c"$();side:"c"$();price:"f"$();size:"i"$();src:"s"$();srcTime:"p"$();orderType:"c"$();prevOrderId:"j"$();snapShotInd:"b"$());
+            quote: ([]date:"d"$();sym:`p#"s"$();time:"p"$();src:"s"$();bid:"f"$();ask:"f"$();bsize:"i"$();asize:"i"$();srcTime:"p"$();cond:"s"$();layer:"s"$();expiryTime:"p"$();msgrcv:"p"$());
+            trade: ([]date:"d"$();sym:`p#"s"$();time:"p"$();price:"f"$();size:"i"$();seqNum:"j"$();src:"s"$();srcTime:"p"$();cond:"s"$();status:"s"$();side:"c"$();msgrcv:"p"$());
+
+            table_names: `dfxOrder`dfxQuote`dfxTrade
+
+            // Incoming event format
+            // list(symbol;dict)
+
+            // Transformations:
+            // none
+            dfxMapFn:{
+                x
+                }
+
+            logLatency:{
+                if[count l:.qsp.get[`latencyCacher; ::];log.info("Approximate ingress ems latency, %N";l)];
+                }
+
+            .tm.add[`latency;(`logLatency;::);10000;0];
+
+            .qsp.run
+                .qsp.read.fromRT[]
+                .qsp.map[{[op;md;data] .qsp.set[op;md;.z.p-data 2];data}; .qsp.use`name`state!(`latencyCacher; ())]
+                .qsp.filter[{(x 0) in table_names}]
+                .qsp.map[traceMapFn]
+                .qsp.write.toRT[]
+    sm:
+      source: south
+      tiers:
+        - name: streaming
+          mount: rdb
+        - name: interval
+          mount: idb
+          schedule:
+            freq: 00:10:00
+            snap: 00:00:00
+        - name: recent
+          mount: hdb
+          schedule:
+            freq: 1D00:00:00
+            snap: 01:35:00
+          retain:
+            time: 3 Months
+    dap:
+      instances:
+        idb:
+          mountName: idb
+        hdb:
+          mountName: hdb
+        rdb:
+          tableLoad: empty
+          mountName: rdb
+          source: south
+    sequencer:
+      south:
+        protocol: "rt"
+      north:
+        protocol: "rt"
+        topicConfig:
+          subTopic: "data"
