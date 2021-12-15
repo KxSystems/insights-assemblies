@@ -251,7 +251,7 @@ spec:
 
             // Transformations:
             // none
-            dfxMapFn:{
+            iotMapFn:{
                 x
                 }
 
@@ -265,7 +265,7 @@ spec:
                 .qsp.read.fromRT[]
                 .qsp.map[{[op;md;data] .qsp.set[op;md;.z.p-data 2];data}; .qsp.use`name`state!(`latencyCacher; ())]
                 .qsp.filter[{(x 0) in table_names}]
-                .qsp.map[traceMapFn]
+                .qsp.map[iotMapFn]
                 .qsp.write.toRT[]
     sm:
       source: south
