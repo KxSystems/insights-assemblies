@@ -1,0 +1,149 @@
+apiVersion: insights.kx.com/v1alpha1
+kind: Assembly
+metadata:
+  name: basic-assembly
+  labels:
+    env: dev
+spec:
+  attach: false
+  labels:
+    type: basic
+  tables:
+    trace:
+      description: Manufacturing trace data
+      type: partitioned
+      shards: 11
+      blockSize: 10000
+      prtnCol: readTS
+      sortColsOrd: [sym]
+      columns:
+        - name: sensorID
+          description: Sensor Identifier
+          type: int
+          attrMem: grouped
+          attrDisk: parted
+          attrOrd: parted
+        - name: readTS
+          description: Reading timestamp
+          type: timestamp
+        - name: captureTS
+          description: Capture timestamp
+          type: timestamp
+        - name: valFloat
+          description: Sensor value
+          type: float
+        - name: qual
+          description: Reading quality
+          type: byte
+        - name: alarm
+          description: Enumerated alarm flag
+          type: byte
+        - name: updateTS
+          description: Update timestamp
+          type: timestamp
+  mounts:
+    rdb:
+      type: stream
+      baseURI: none
+      partition: none
+    idb:
+      type: local
+      baseURI: file:///data/db/idb
+      partition: ordinal
+      volume:
+        storageClass: "azurefile"
+        size: "20Gi"
+        accessModes: 
+          - ReadWriteMany
+    hdb:
+      type: local
+      baseURI: file:///data/db/hdb
+      partition: date
+      dependency:
+      - idb
+      volume:
+        storageClass: "azurefile"
+        size: "20Gi"
+        accessModes: 
+          - ReadWriteMany
+  elements:
+    sp:
+      description: Processor of streams
+      pipelines:
+        sdtransform:
+          protectedExecution: false
+          source: north
+          destination: south
+          spec: |-
+              sensor: ([]sensorID:`g#"i"$();extSensorID:`$();name:`$();typ:"x"$();createTS:"p"$();updateTS:"p"$());
+              trace: ([]sensorID:`g#"i"$();readTS:"p"$();captureTS:"p"$();valFloat:"f"$();qual:"h"$();alarm:"x"$();updateTS:"p"$());
+
+              .enum.alarm:``NORMAL`HIGH!(::;0x01;0x02)
+              .enum.qual:``GOOD!(::;0x01)
+
+              // Incoming event format
+              // list(symbol;dict)
+
+              // Transformations:
+              // - format into table
+              // - scale values
+              // - translate timestamps
+              // - set alarm based off values
+              // - sort by sensorID and readTS
+              traceMapFn:{
+                  rawData:x 1;
+                  svals:rawData[`val]*rawData`scaling;
+                  rts:rawData[`ts]+rawData`timeOffset;
+                  (`trace;
+                    `sensorID`readTS xasc flip cols[trace]!(rawData`id;rts;rawData`ts;svals;.enum.qual`GOOD;
+                      ?[5000f<svals;.enum.alarm`HIGH;.enum.alarm`NORMAL];.z.p)
+                  )
+                  }
+
+              logLatency:{
+                  if[count l:.qsp.get[`latencyCacher; ::];log.info("Approximate ingress latency, %N";l)];
+                  }
+
+              .tm.add[`latency;(`logLatency;::);10000;0];
+
+              .qsp.run
+                  .qsp.read.fromRT[]
+                  .qsp.map[{[op;md;data] .qsp.set[op;md;.z.p-data 2];data}; .qsp.use`name`state!(`latencyCacher; ())]
+                  .qsp.filter[{`trace=x 0}]
+                  .qsp.map[traceMapFn]
+                  .qsp.write.toRT[]
+
+    sm:
+      source: south
+      tiers:
+        - name: streaming
+          mount: rdb
+        - name: interval
+          mount: idb
+          schedule:
+            freq: 00:10:00
+            snap: 00:00:00
+        - name: recent
+          mount: hdb
+          schedule:
+            freq: 1D00:00:00
+            snap:   01:35:00
+          retain:
+            time: 3 Months
+    dap:
+      instances:
+        idb:
+          mountName: idb
+        hdb:
+          mountName: hdb
+        rdb:
+          tableLoad: empty
+          mountName: rdb
+          source: south
+    sequencer:
+      south:
+        protocol: "rt"
+      north:
+        protocol: "rt"
+        topicConfig:
+          subTopic: "data"
