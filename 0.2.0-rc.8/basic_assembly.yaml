@@ -12,7 +12,6 @@ spec:
     trace:
       description: Manufacturing trace data
       type: partitioned
-      shards: 11
       blockSize: 10000
       prtnCol: readTS
       sortColsOrd: [sym]
@@ -51,7 +50,7 @@ spec:
       baseURI: file:///data/db/idb
       partition: ordinal
       volume:
-        storageClass: "azurefile"
+        storageClass: "rook-cephfs"
         size: "20Gi"
         accessModes: 
           - ReadWriteMany
@@ -62,7 +61,7 @@ spec:
       dependency:
       - idb
       volume:
-        storageClass: "azurefile"
+        storageClass: "rook-cephfs"
         size: "20Gi"
         accessModes: 
           - ReadWriteMany
@@ -142,8 +141,8 @@ spec:
           source: south
     sequencer:
       south:
-        protocol: "rt"
+        external: false
       north:
-        protocol: "rt"
+        external: false
         topicConfig:
           subTopic: "data"
