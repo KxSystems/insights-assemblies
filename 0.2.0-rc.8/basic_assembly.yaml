@@ -142,7 +142,11 @@ spec:
     sequencer:
       south:
         external: false
+        archiver:
+          maxLogSize: "5g"
       north:
-        external: false
+        external: true
         topicConfig:
           subTopic: "data"
+        archiver:
+          maxLogSize: "5g"
