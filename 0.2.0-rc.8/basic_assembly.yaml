@@ -14,7 +14,7 @@ spec:
       type: partitioned
       blockSize: 10000
       prtnCol: readTS
-      sortColsOrd: [sym]
+      sortColsOrd: [sensorID]
       columns:
         - name: sensorID
           description: Sensor Identifier
