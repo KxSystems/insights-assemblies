@@ -15,6 +15,7 @@ spec:
       blockSize: 10000
       prtnCol: readTS
       sortColsOrd: [sensorID]
+      sortColsDisk: [sensorID]
       columns:
         - name: sensorID
           description: Sensor Identifier
@@ -50,7 +51,7 @@ spec:
       baseURI: file:///data/db/idb
       partition: ordinal
       volume:
-        storageClass: "rook-cephfs"
+        storageClass: "azurefile"
         size: "20Gi"
         accessModes: 
           - ReadWriteMany
@@ -61,7 +62,7 @@ spec:
       dependency:
       - idb
       volume:
-        storageClass: "rook-cephfs"
+        storageClass: "azurefile"
         size: "20Gi"
         accessModes: 
           - ReadWriteMany
@@ -106,12 +107,11 @@ spec:
               .tm.add[`latency;(`logLatency;::);10000;0];
 
               .qsp.run
-                  .qsp.read.fromRT[]
+                  .qsp.read.fromStream[]
                   .qsp.map[{[op;md;data] .qsp.set[op;md;.z.p-data 2];data}; .qsp.use`name`state!(`latencyCacher; ())]
                   .qsp.filter[{`trace=x 0}]
                   .qsp.map[traceMapFn]
-                  .qsp.write.toRT[]
-
+                  .qsp.write.toStream[]
     sm:
       source: south
       tiers:
@@ -142,11 +142,7 @@ spec:
     sequencer:
       south:
         external: false
-        archiver:
-          maxLogSize: "5g"
       north:
         external: true
         topicConfig:
-          subTopic: "data"
-        archiver:
-          maxLogSize: "5g"
+          subTopic: "basic-assembly"
