@@ -1,0 +1,307 @@
+apiVersion: insights.kx.com/v1alpha1
+kind: Assembly
+metadata:
+  name: iot-assembly
+  labels:
+    env: dev
+spec:
+  attach: false
+  labels:
+    type: basic
+  tables:
+    iotAsset:
+      description: Asset table
+      type: partitioned
+      updTsCol: createTS
+      columns:
+        - name: assetID
+          type: int
+          attrMem: unique
+          description: Internal asset identifier
+        - name: extAssetID
+          type: symbol
+          attrMem: unique
+          description: External asset identifier
+        - name: locationID
+          type: int
+          description: Internal location identifier
+        - name: status
+          type: short
+          description: Asset status
+        - name: model
+          type: symbol
+          description: Asset model
+        - name: name
+          type: symbol
+          description: Asset name
+        - name: serialNo
+          type: symbol
+          description: Asset serial number
+        - name: createTS
+          type: timestamp
+          description: Asset creation timestamp
+        - name: updateTS
+          type: timestamp
+          description: Asset update timestamp
+        - name: des
+          type: symbol
+          description: Asset description
+        - name: isDeleted
+          type: boolean
+          description: Whether asset is deleted
+    iotInterface:
+      description: Interface table
+      type: partitioned
+      updTsCol: createTS
+      columns:
+        - name: interfaceID
+          type: int
+          attrMem: unique
+          description: Internal interface identifier
+        - name: extInterfaceID
+          type: symbol
+          attrMem: unique
+          description: External interface identifier
+        - name: name
+          type: symbol
+          description: Interface name
+        - name: createTS
+          type: timestamp
+          description: Interface creation timestamp
+        - name: updateTS
+          type: timestamp
+          description: Interface update timestamp
+        - name: des
+          type: symbol
+          description: Interface description
+        - name: isDeleted
+          type: boolean
+          description: Whether interface is deleted
+    iotLocation:
+      description: Location table
+      type: partitioned
+      updTsCol: createTS
+      columns:
+        - name: locationID
+          type: int
+          attrMem: unique
+          description: Internal location identifier
+        - name: extLocationID
+          type: symbol
+          attrMem: unique
+          description: External location identifier
+        - name: country
+          type: symbol
+          attrMem: grouped
+          description: Country of address
+        - name: state
+          type: symbol
+          description: State or province of address
+        - name: city
+          type: symbol
+          description: City of address
+        - name: street
+          type: symbol
+          description: Street of address
+        - name: unit
+          type: int
+          description: Unit number of address
+        - name: zip
+          type: symbol
+          description: Zip code of address
+        - name: si
+          type: long
+          description: Spatial index encoding
+        - name: lat
+          type: float
+          description: Latitude
+        - name: lon
+          type: float
+          description: longitude
+        - name: tzID
+          type: int
+          description: Internal timezone identifier
+        - name: createTS
+          type: timestamp
+          description: Location creation timestamp
+        - name: updateTS
+          type: timestamp
+          description: Location update timestamp
+        - name: isDeleted
+          type: boolean
+          description: Whether location is deleted
+    iotReading:
+      description: Reading table
+      type: partitioned
+      updTsCol: createTS
+      columns:
+        - name: sensorID
+          type: int
+          attrMem: grouped
+          description: Internal sensor identifier
+        - name: minTS
+          type: timestamp
+          description: Minimum timestamp of readings
+        - name: maxTS
+          type: timestamp
+          description: Maximum timestamp of readings
+        - name: longs
+          type: long
+          description: Reading measures as longs, or empty
+        - name: floats
+          type: float
+          description: Reading measures as floats, or empty
+        - name: strings
+          type: symbol
+          description: Reading measures as strings, or empty
+        - name: tss
+          type: timestamp
+          description: Timestamps of readings
+        - name: updateTS
+          type: timestamp
+          description: Update timestamp of readings
+    iotSensor:
+      description: Sensor table
+      type: partitioned
+      updTsCol: createTS
+      columns:
+        - name: sensorID
+          type: int
+          attrMem: unique
+          description: Internal sensor identifier
+        - name: extSensorID
+          type: symbol
+          attrMem: unique
+          description: External sensor identifier
+        - name: assetID
+          type: int
+          attrMem: grouped
+          description: Internal asset identifier
+        - name: interfaceID
+          type: int
+          description: Internal interface identifier
+        - name: status
+          type: short
+          description: Sensor status
+        - name: iCol
+          type: symbol
+          description: Ingestion columns
+        - name: class
+          type: short
+          description: Sensor class
+        - name: name
+          type: symbol
+          description: Sensor name
+        - name: serialNo
+          type: symbol
+          description: Sensor serial number
+        - name: uom
+          type: short
+          description: Sensor unit-of-measure
+        - name: createTS
+          type: timestamp
+          description: Sensor creation timestamp
+        - name: updateTS
+          type: timestamp
+          description: Sensor update timestamp
+        - name: des
+          type: symbol
+          description: Sensor description
+        - name: isDeleted
+          type: boolean
+          description: Whether sensor is deleted
+  mounts:
+    rdb:
+      type: stream
+      baseURI: none
+      partition: none
+    idb:
+      type: local
+      baseURI: file:///data/db/idb
+      partition: ordinal
+      volume:
+        storageClass: "rook-cephfs"
+        size: "20Gi"
+        accessModes:
+          - ReadWriteMany
+    hdb:
+      type: local
+      baseURI: file:///data/db/hdb
+      partition: date
+      dependency:
+        - idb
+      volume:
+        storageClass: "rook-cephfs"
+        size: "20Gi"
+        accessModes:
+          - ReadWriteMany
+  elements:
+    sp:
+      description: Processor of streams
+      pipelines:
+        iotdefault:
+          protectedExecution: false
+          source: north
+          destination: south
+          spec: |-
+            table_names: `iotAsset`iotInterface`iotLocation`iotReading`iotSensor
+
+            // Incoming event format
+            // list(symbol;dict)
+
+            // Transformations:
+            // none
+            iotMapFn:{
+                x
+                }
+
+            logLatency:{
+                if[count l:.qsp.get[`latencyCacher; ::];log.info("Approximate ingress ems latency, %N";l)];
+                }
+
+            .tm.add[`latency;(`logLatency;::);10000;0];
+
+            .qsp.run
+                .qsp.read.fromRT[]
+                .qsp.map[{[op;md;data] .qsp.set[op;md;.z.p-data 2];data}; .qsp.use`name`state!(`latencyCacher; ())]
+                .qsp.filter[{(x 0) in table_names}]
+                .qsp.map[iotMapFn]
+                .qsp.write.toRT[]
+    sm:
+      source: south
+      tiers:
+        - name: streaming
+          mount: rdb
+        - name: interval
+          mount: idb
+          schedule:
+            freq: 00:10:00
+            snap: 00:00:00
+        - name: recent
+          mount: hdb
+          schedule:
+            freq: 1D00:00:00
+            snap: 01:35:00
+          retain:
+            time: 3 Months
+    dap:
+      instances:
+        idb:
+          mountName: idb
+        hdb:
+          mountName: hdb
+        rdb:
+          tableLoad: empty
+          mountName: rdb
+          source: south
+    sequencer:
+      south:
+        external: false
+        archiver:
+          maxLogSize: "5g"
+      north:
+        external: true
+        topicConfig:
+          subTopic: "data"
+        archiver:
+          maxLogSize: "5g"

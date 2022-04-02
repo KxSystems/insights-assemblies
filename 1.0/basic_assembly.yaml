@@ -1,0 +1,136 @@
+apiVersion: insights.kx.com/v1
+kind: Assembly
+metadata:
+  name: basic-assembly
+  labels:
+    env: dev
+spec:
+  attach: false
+  labels:
+    type: basic
+  tables:
+    trace:
+      description: Manufacturing trace data
+      type: partitioned
+      blockSize: 10000
+      prtnCol: readTS
+      sortColsOrd: [sensorID]
+      sortColsDisk: [sensorID]
+      columns:
+        - name: sensorID
+          description: Sensor Identifier
+          type: int
+          attrMem: grouped
+          attrDisk: parted
+          attrOrd: parted
+        - name: readTS
+          description: Reading timestamp
+          type: timestamp
+        - name: captureTS
+          description: Capture timestamp
+          type: timestamp
+        - name: valFloat
+          description: Sensor value
+          type: float
+        - name: qual
+          description: Reading quality
+          type: byte
+        - name: alarm
+          description: Enumerated alarm flag
+          type: byte
+        - name: updateTS
+          description: Update timestamp
+          type: timestamp
+  mounts:
+    rdb:
+      type: stream
+      baseURI: none
+      partition: none
+    idb:
+      type: local
+      baseURI: file:///data/db/idb
+      partition: ordinal
+    hdb:
+      type: local
+      baseURI: file:///data/db/hdb
+      partition: date
+      volume:
+        claimName: hdb-claim
+      dependency:
+      - idb
+  elements:
+    sp:
+      description: Processor of streams
+      pipelines:
+        sdtransform:
+          protectedExecution: false
+          source: north
+          destination: south
+          spec: |-
+              sensor: ([]sensorID:`g#"i"$();extSensorID:`$();name:`$();typ:"x"$();createTS:"p"$();updateTS:"p"$());
+              trace: ([]sensorID:`g#"i"$();readTS:"p"$();captureTS:"p"$();valFloat:"f"$();qual:"h"$();alarm:"x"$();updateTS:"p"$());
+
+              .enum.alarm:``NORMAL`HIGH!(::;0x01;0x02)
+              .enum.qual:``GOOD!(::;0x01)
+
+              // Incoming event format
+              // list(symbol;dict)
+
+              // Transformations:
+              // - format into table
+              // - scale values
+              // - translate timestamps
+              // - set alarm based off values
+              // - sort by sensorID and readTS
+              transform: {[data]
+                  svals: data[`val]*data`scaling;
+                  `sensorID`readTS xasc flip cols[trace]!(
+                      data`id;
+                      data[`ts]+data`timeOffset;
+                      data`ts;
+                      svals;
+                      .enum.qual`GOOD;
+                      ?[5000f < svals; .enum.alarm`HIGH; .enum.alarm`NORMAL];
+                      .z.p)
+                  }
+
+              .qsp.run
+                  .qsp.read.fromStream[`trace]
+                  .qsp.map[transform]
+                  .qsp.write.toStream[]
+    sm:
+      source: south
+      tiers:
+        - name: streaming
+          mount: rdb
+        - name: interval
+          mount: idb
+          schedule:
+            freq: 00:10:00
+            snap: 00:00:00
+        - name: recent
+          mount: hdb
+          schedule:
+            freq: 1D00:00:00
+            snap:   01:35:00
+          retain:
+            time: 3 Months
+      rtLogVolume:
+        size: "20Gi"
+        
+    dap:
+      instances:
+        idb:
+          mountName: idb
+        hdb:
+          mountName: hdb
+        rdb:
+          mountName: rdb
+          source: south
+    sequencer:
+      south:
+        external: false
+      north:
+        external: true
+        topicConfig:
+          subTopic: "basic-assembly"
